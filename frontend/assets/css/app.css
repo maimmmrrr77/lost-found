@@ -1,1 +1,12 @@
-body{background:#f7f8fa}.hero{background:linear-gradient(135deg,#eef4ff,#fff)}.post-img{height:190px;object-fit:cover;background:#e9ecef}.card{height:100%}.badge-lost{background:#dc3545}.badge-found{background:#198754}.truncate{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+body{background:#f7f8fa}
+.hero{background:linear-gradient(135deg,#eef4ff,#fff)}
+.post-img{height:190px;object-fit:cover;background:#e9ecef}
+#posts .card,#minePosts .card{height:100%}
+.badge-lost{background:#dc3545}
+.badge-found{background:#198754}
+.truncate{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.nav-link .badge{font-size:.7rem;vertical-align:top}
+.nav-tabs .nav-link{border:0;color:#495057}
+.nav-tabs .nav-link.active{border-bottom:2px solid #0d6efd;color:#0d6efd;background:transparent}
+.table td,.table th{vertical-align:middle}
+#detailBody img{max-height:260px;object-fit:cover;width:100%}

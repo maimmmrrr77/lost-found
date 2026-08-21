@@ -19,6 +19,8 @@ Base URL: `/api`
 | GET | `/notifications` | Yes | Thông báo |
 | PATCH | `/notifications/{id}/read` | Yes | Đánh dấu đã đọc |
 
+Khi chủ bài `LOST` xác nhận match với trạng thái `CONFIRMED`, hệ thống tự động chuyển cả bài `LOST` và bài `FOUND` liên quan sang `CLOSED`. Chỉ chủ bài `LOST` được xác nhận; các bên liên quan vẫn có thể từ chối match.
+
 ## Ví dụ tạo bài
 
 ```json
