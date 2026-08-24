@@ -1,4 +1,4 @@
-# Lost & Found AI
+# Lost & Found
 
 Khung dự án cho đề tài **Xây dựng hệ thống tìm kiếm đồ vật thất lạc ứng dụng AI so khớp thông tin**.
 

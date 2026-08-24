@@ -480,7 +480,7 @@ $('#postForm').onsubmit = async (e) => {
 
     postModal.hide();
     e.target.reset();
-    msg('Đăng tin thành công. Hệ thống đã chạy so khớp AI.' + note, 'success');
+    msg('Đăng tin thành công. Hệ thống đã chạy so khớp.' + note, 'success');
     showView('home');
     loadPosts();
     refreshBadges();
