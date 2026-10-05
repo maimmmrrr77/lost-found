@@ -12,7 +12,7 @@ final class AiClient
         $payload = json_encode([
             'lost' => self::aiPayload($lostPost),
             'found' => self::aiPayload($foundPost),
-            'model' => 'multimodal-v1' // Sử dụng mô hình kết hợp trọng số mới
+            'model' => $model
         ], JSON_UNESCAPED_UNICODE);
 
         $ch = curl_init($url);
@@ -25,13 +25,22 @@ final class AiClient
         ]);
         $raw = curl_exec($ch);
         $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
         curl_close($ch);
 
-        if ($status >= 200 && $status < 300 && $raw) {
-            $json = json_decode($raw, true);
-            return (float)($json['similarity'] ?? 0);
+        if ($raw === false) {
+            throw new \RuntimeException("Không kết nối được AI service: {$error}");
         }
-        return 0.0;
+        if ($status < 200 || $status >= 300) {
+            throw new \RuntimeException("AI service trả về HTTP {$status}: {$raw}");
+        }
+
+        $json = json_decode($raw, true);
+        if (!is_array($json) || !isset($json['similarity']) || !is_numeric($json['similarity'])) {
+            throw new \RuntimeException('AI service trả về kết quả similarity không hợp lệ');
+        }
+
+        return (float)$json['similarity'];
     }
 
     /**
@@ -52,13 +61,22 @@ final class AiClient
         ]);
         $raw = curl_exec($ch);
         $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
         curl_close($ch);
 
-        if ($status >= 200 && $status < 300 && $raw) {
-            $json = json_decode($raw, true);
-            return $json['embedding'] ?? null;
+        if ($raw === false) {
+            throw new \RuntimeException("Không kết nối được AI service để trích xuất ảnh: {$error}");
         }
-        return null;
+        if ($status < 200 || $status >= 300) {
+            throw new \RuntimeException("AI service không trích xuất được ảnh (HTTP {$status}): {$raw}");
+        }
+
+        $json = json_decode($raw, true);
+        if (!is_array($json) || !isset($json['embedding']) || !is_array($json['embedding'])) {
+            throw new \RuntimeException('AI service trả về vector ảnh không hợp lệ');
+        }
+
+        return $json['embedding'];
     }
 
     private static function aiPayload(array $post): array

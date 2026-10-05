@@ -1,4 +1,3 @@
-from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Literal, Optional, List
 import os
@@ -10,10 +9,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from PIL import Image
 import torch
-from transformers import CLIPProcessor, CLIPModel
+from transformers import CLIPProcessor, CLIPVisionModelWithProjection
 
 MODEL_PATH = os.getenv("LSA_MODEL_PATH", "/app/model/lsa_model.joblib")
-DEFAULT_MODEL = os.getenv("AI_MODEL", "tfidf-svd-v2")
+MODEL_NAME = "multimodal-v1"
 
 app = FastAPI(title="Lost & Found AI Service", version="2.0")
 
@@ -22,7 +21,7 @@ app = FastAPI(title="Lost & Found AI Service", version="2.0")
 # ---------------------------------------------------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
 try:
-    clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
+    clip_model = CLIPVisionModelWithProjection.from_pretrained("openai/clip-vit-base-patch32").to(device)
     clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 except Exception as e:
     clip_model = None
@@ -71,7 +70,7 @@ class ImageExtractRequest(BaseModel):
 class SimilarityRequest(BaseModel):
     lost: PostFeature
     found: PostFeature
-    model: Optional[Literal["hybrid-text-v1", "tfidf-svd-v2", "multimodal-v1"]] = None
+    model: Literal["multimodal-v1"] = MODEL_NAME
 
 # ---------------------------------------------------------------------
 # Các hàm trợ giúp (Helper Functions)
@@ -125,15 +124,13 @@ def clamp(x: float) -> float:
 # ---------------------------------------------------------------------
 # Công thức so khớp tổng hợp mới
 # ---------------------------------------------------------------------
-def score_multimodal(a: PostFeature, b: PostFeature, text_model: str = "tfidf-svd-v2") -> dict:
-    if text_model == "tfidf-svd-v2" and get_lsa() is not None:
-        lsa = get_lsa()
+def score_multimodal(a: PostFeature, b: PostFeature) -> dict:
+    lsa = get_lsa()
+    if lsa is not None:
         v = lsa.transform([norm(long_text(a)), norm(long_text(b))])
         s_text = max(0.0, float(v[0] @ v[1]))
     else:
-        j = token_jaccard(long_text(a), long_text(b))
-        seq = SequenceMatcher(None, norm(long_text(a)), norm(long_text(b))).ratio()
-        s_text = 0.6 * j + 0.4 * seq
+        s_text = token_jaccard(long_text(a), long_text(b))
 
     brand, color, cat = attr_signals(a, b)
     s_attr = 0.40 * brand + 0.30 * color + 0.30 * cat
@@ -164,18 +161,6 @@ def score_multimodal(a: PostFeature, b: PostFeature, text_model: str = "tfidf-sv
         }
     }
 
-def score_hybrid(a: PostFeature, b: PostFeature) -> dict:
-    return score_multimodal(a, b, text_model="hybrid-text-v1")
-
-def score_lsa(a: PostFeature, b: PostFeature) -> dict:
-    return score_multimodal(a, b, text_model="tfidf-svd-v2")
-
-SCORERS = {
-    "hybrid-text-v1": score_hybrid,
-    "tfidf-svd-v2": score_lsa,
-    "multimodal-v1": score_lsa
-}
-
 # ---------------------------------------------------------------------
 # API Endpoints
 # ---------------------------------------------------------------------
@@ -183,9 +168,9 @@ SCORERS = {
 def health():
     return {
         "status": "ok",
-        "default_model": DEFAULT_MODEL,
+        "default_model": MODEL_NAME,
         "clip_loaded": clip_model is not None,
-        "available_models": list(SCORERS),
+        "available_models": [MODEL_NAME],
         "lsa_status": _lsa_state
     }
 
@@ -200,7 +185,7 @@ def extract_image_feature(req: ImageExtractRequest):
         image = Image.open(req.image_path).convert("RGB")
         inputs = clip_processor(images=image, return_tensors="pt").to(device)
         with torch.no_grad():
-            image_features = clip_model.get_image_features(**inputs)
+            image_features = clip_model(**inputs).image_embeds
         image_features = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
         embedding = image_features.cpu().numpy()[0].tolist()
         return {"embedding": embedding, "dimensions": len(embedding)}
@@ -209,6 +194,4 @@ def extract_image_feature(req: ImageExtractRequest):
 
 @app.post("/similarity")
 def similarity(req: SimilarityRequest):
-    name = req.model or DEFAULT_MODEL
-    scorer = SCORERS.get(name, score_lsa)
-    return scorer(req.lost, req.found)
+    return score_multimodal(req.lost, req.found)

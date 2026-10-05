@@ -360,17 +360,25 @@ async function loadNotifications() {
 async function uploadImages(postId, fileList) {
   const files = Array.from(fileList || []);
   let ok = 0, fail = 0;
+  const errors = [];
 
   for (const file of files) {
-    if (file.size > 5 * 1024 * 1024) { fail++; continue; }
+    if (file.size > 5 * 1024 * 1024) {
+      fail++;
+      errors.push(`${file.name}: ảnh vượt quá 5MB`);
+      continue;
+    }
     const fd = new FormData();
     fd.append('image', file);
     try {
       await api(`/posts/${postId}/images`, { method: 'POST', body: fd });
       ok++;
-    } catch { fail++; }
+    } catch (e) {
+      fail++;
+      errors.push(`${file.name}: ${e.message}`);
+    }
   }
-  return { ok, fail, total: files.length };
+  return { ok, fail, total: files.length, errors };
 }
 
 /* ---------------- Sự kiện ---------------- */
@@ -476,6 +484,7 @@ $('#postForm').onsubmit = async (e) => {
     if (files.length) {
       const r = await uploadImages(created.id, files);
       note = ` Đã tải lên ${r.ok}/${r.total} ảnh.`;
+      if (r.fail) note += ` ${r.fail} ảnh thất bại: ${r.errors.join('; ')}.`;
     }
 
     postModal.hide();
@@ -503,10 +512,11 @@ $('#uploadForm').onsubmit = async (e) => {
     const r = await uploadImages(postId, files);
     uploadModal.hide();
     e.target.reset();
-    msg(`Đã tải lên ${r.ok}/${r.total} ảnh.` + (r.fail ? ` ${r.fail} ảnh thất bại (sai định dạng hoặc quá 5MB).` : ''),
+    msg(`Đã tải lên ${r.ok}/${r.total} ảnh.` + (r.fail ? ` ${r.fail} ảnh thất bại: ${r.errors.join('; ')}.` : ''),
         r.fail ? 'warning' : 'success');
     if (!$('#view-mine').classList.contains('d-none')) loadMyPosts();
     if (!$('#view-detail').classList.contains('d-none')) loadDetail(postId);
+    refreshBadges();
   } catch (x) { msg(x.message, 'danger'); }
 };
 

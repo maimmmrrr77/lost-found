@@ -6,7 +6,7 @@
 - Admin quản lý user/category/post.
 
 ## Giai đoạn 2 – AI thật
-- Thay `hybrid-text-v1` bằng embedding đa phương thức, ví dụ CLIP/SigLIP cho ảnh + text embedding tiếng Việt.
+- Dùng duy nhất pipeline `multimodal-v1`, kết hợp CLIP cho ảnh, LSA cho văn bản và thuộc tính/ngữ cảnh.
 - Lưu vector trong vector DB hoặc cột vector phù hợp thay vì chỉ `embedding_path`.
 - Kết hợp điểm: image similarity + text semantic + category/color/brand/location/time.
 - Đánh giá Precision@K, Recall@K, threshold matching.

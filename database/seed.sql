@@ -16,5 +16,3 @@ INSERT IGNORE INTO categories(id,name,description,status) VALUES
 -- password: Admin@123
 INSERT IGNORE INTO users(id,full_name,username,email,phone,password,role,status,created_at) VALUES
 (1,'Quản trị hệ thống','admin','admin@example.com',NULL,'$2y$12$Jk/U0hfAKbeqSkUCPvcGze5POr.LtokXOJMMJwAIjth7sp8KkScm.','ADMIN',1,NOW());
-ALTER TABLE ai_features 
-ADD COLUMN embedding_data LONGTEXT NULL AFTER embedding_path;

@@ -78,7 +78,7 @@ final class PostController
         $ins=$pdo->prepare('INSERT INTO images(post_id,image_path,is_primary) VALUES(?,?,?)');$ins->execute([$id,'/uploads/'.$name,$primary]);
         $imageId = (int)$pdo->lastInsertId();
 
-        // 1. NỐI CLIP: Trích xuất feature vector từ ảnh vừa tải lên
+        // 1. Trích xuất đặc trưng hình ảnh qua CLIP API
         $embeddingArray = AiClient::extractImageFeature($path);
         if ($embeddingArray) {
             // 2. Lưu vector JSON vào bảng ai_features
@@ -94,7 +94,21 @@ final class PostController
 
     public static function myPosts(): never
     {
-        $user=Auth::user();$stmt=Database::connection()->prepare('SELECT * FROM posts WHERE user_id=? ORDER BY created_at DESC');$stmt->execute([(int)$user->sub]);Response::json($stmt->fetchAll());
+        $user = Auth::user();
+        $pdo = Database::connection();
+
+        // Truy vấn lấy các bài đăng của user kèm theo đường dẫn ảnh đại diện primary_image
+        $sql = 'SELECT p.*, c.name AS category_name,
+                (SELECT image_path FROM images i WHERE i.post_id = p.id ORDER BY is_primary DESC, id LIMIT 1) AS primary_image
+                FROM posts p
+                LEFT JOIN categories c ON c.id = p.category_id
+                WHERE p.user_id = ?
+                ORDER BY p.created_at DESC';
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([(int)$user->sub]);
+
+        Response::json($stmt->fetchAll(PDO::FETCH_ASSOC));
     }
 
     public static function close(int $id): never
@@ -112,52 +126,52 @@ final class PostController
         $post = self::getPostWithImageEmbedding($pdo, $postId);
         if(!$post) return;
 
-        $opposite=$post['post_type']==='LOST'?'FOUND':'LOST';
+        $opposite = $post['post_type'] === 'LOST' ? 'FOUND' : 'LOST';
         
-        // Lấy danh sách 50 bài đăng đối lập
-        $q=$pdo->prepare('SELECT id FROM posts WHERE post_type=? AND status="OPEN" AND category_id=? AND id<>? ORDER BY created_at DESC LIMIT 50');
-        $q->execute([$opposite, $post['category_id'], $postId]);
+        // Lấy danh sách 50 bài đăng đối lập (Mở rộng tìm kiếm toàn bộ danh mục)
+        $q = $pdo->prepare('SELECT id FROM posts WHERE post_type=? AND status="OPEN" AND id<>? ORDER BY created_at DESC LIMIT 50');
+        $q->execute([$opposite, $postId]);
         
-        $threshold=(float)(getenv('AI_MATCH_THRESHOLD')?:0.55); // Giảm ngưỡng mặc định để tương thích multimodal
+        $threshold = (float)(getenv('AI_MATCH_THRESHOLD') ?: 0.45);
         
         foreach($q->fetchAll(PDO::FETCH_COLUMN) as $candidateId) {
             $candidate = self::getPostWithImageEmbedding($pdo, (int)$candidateId);
             if(!$candidate) continue;
 
-            // Gọi AI client tính điểm theo mô hình multimodal-v1
             $score = AiClient::similarity($post, $candidate);
             if($score < $threshold) continue;
 
-            $lost = $post['post_type']==='LOST' ? $post : $candidate; 
-            $found = $post['post_type']==='FOUND' ? $post : $candidate;
+            $lost = $post['post_type'] === 'LOST' ? $post : $candidate;
+            $found = $post['post_type'] === 'FOUND' ? $post : $candidate;
 
-            $ins=$pdo->prepare('INSERT INTO matches(lost_post_id,found_post_id,similarity_score,ai_model,status,created_at) VALUES(?,?,?,?,"PENDING",NOW()) ON DUPLICATE KEY UPDATE similarity_score=VALUES(similarity_score), ai_model=VALUES(ai_model)');
+            $ins = $pdo->prepare('INSERT INTO matches(lost_post_id,found_post_id,similarity_score,ai_model,status,created_at) VALUES(?,?,?,?,"PENDING",NOW()) ON DUPLICATE KEY UPDATE similarity_score=VALUES(similarity_score), ai_model=VALUES(ai_model)');
             $ins->execute([$lost['id'], $found['id'], $score, 'multimodal-v1']);
 
             foreach(array_unique([(int)$lost['user_id'], (int)$found['user_id']]) as $uid){
-                $n=$pdo->prepare('INSERT INTO notifications(user_id,title,content,is_read,created_at) VALUES(?,?,?,0,NOW())');
+                $n = $pdo->prepare('INSERT INTO notifications(user_id,title,content,is_read,created_at) VALUES(?,?,?,0,NOW())');
                 $n->execute([$uid, 'Có đồ vật tương đồng', sprintf('Hệ thống phát hiện một bài đăng có độ tương đồng %.1f%%.', $score*100)]);
             }
         }
     }
 
     /**
-     * Hàm phụ trợ lấy thông tin bài đăng kèm theo mảng vector ảnh (image_embedding)
+     * Lấy bài đăng kèm vector đặc trưng hình ảnh
      */
     private static function getPostWithImageEmbedding(PDO $pdo, int $postId): ?array
     {
         $stmt = $pdo->prepare('
             SELECT p.*, af.embedding_data 
             FROM posts p
-            LEFT JOIN images i ON p.id = i.post_id AND i.is_primary = 1
+            LEFT JOIN images i ON p.id = i.post_id
             LEFT JOIN ai_features af ON i.id = af.image_id
             WHERE p.id = ?
+            ORDER BY (af.embedding_data IS NOT NULL) DESC, i.is_primary DESC, i.id DESC
+            LIMIT 1
         ');
         $stmt->execute([$postId]);
         $post = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$post) return null;
 
-        // Chuyển đổi chuỗi JSON vector lưu trong DB thành mảng PHP
         $post['image_embedding'] = !empty($post['embedding_data']) 
             ? json_decode($post['embedding_data'], true) 
             : null;
