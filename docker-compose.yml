@@ -22,7 +22,9 @@ services:
   ai-service:
     build: ./ai-service
     ports:
-      - "8001:8000"
+      - "8001:8001"
+    environment:
+    - AI_MODEL=multimodal-v1
 
   web:
     build: ./backend

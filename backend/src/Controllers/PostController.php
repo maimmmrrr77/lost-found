@@ -52,7 +52,10 @@ final class PostController
         $stmt=$pdo->prepare('INSERT INTO posts(user_id,category_id,post_type,title,description,color,brand,location,event_date,contact,reward,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NOW())');
         $stmt->execute([(int)$user->sub,(int)$b['category_id'],$b['post_type'],trim($b['title']),trim($b['description']),$b['color']??null,$b['brand']??null,trim($b['location']),$b['event_date'],$b['contact']??null,$b['reward']??0,'OPEN']);
         $id=(int)$pdo->lastInsertId();
+        
+        // Chạy so khớp ban đầu (theo Text & Thuộc tính)
         self::runMatching($id);
+        
         Response::json(['id'=>$id],201,'Tạo bài đăng thành công');
     }
 
@@ -70,9 +73,23 @@ final class PostController
         $dir=getenv('UPLOAD_DIR')?:'/var/www/html/uploads'; if(!is_dir($dir)) mkdir($dir,0775,true);
         $name=bin2hex(random_bytes(16)).'.'.$ext; $path=$dir.'/'.$name;
         if(!move_uploaded_file($_FILES['image']['tmp_name'],$path)) Response::json(null,500,'Không lưu được ảnh');
+        
         $count=$pdo->prepare('SELECT COUNT(*) FROM images WHERE post_id=?');$count->execute([$id]);$primary=((int)$count->fetchColumn()===0)?1:0;
         $ins=$pdo->prepare('INSERT INTO images(post_id,image_path,is_primary) VALUES(?,?,?)');$ins->execute([$id,'/uploads/'.$name,$primary]);
-        Response::json(['id'=>(int)$pdo->lastInsertId(),'path'=>'/uploads/'.$name],201,'Tải ảnh thành công');
+        $imageId = (int)$pdo->lastInsertId();
+
+        // 1. NỐI CLIP: Trích xuất feature vector từ ảnh vừa tải lên
+        $embeddingArray = AiClient::extractImageFeature($path);
+        if ($embeddingArray) {
+            // 2. Lưu vector JSON vào bảng ai_features
+            $featureStmt = $pdo->prepare('INSERT INTO ai_features(image_id, embedding_data, model_name, created_at) VALUES(?, ?, ?, NOW())');
+            $featureStmt->execute([$imageId, json_encode($embeddingArray), 'clip-vit-base-patch32']);
+        }
+
+        // 3. Tự động tái so khớp lại khi có ảnh mới để cập nhật điểm chính xác hơn
+        self::runMatching($id);
+
+        Response::json(['id'=>$imageId,'path'=>'/uploads/'.$name],201,'Tải ảnh thành công');
     }
 
     public static function myPosts(): never
@@ -90,20 +107,61 @@ final class PostController
     private static function runMatching(int $postId): void
     {
         $pdo=Database::connection();
-        $s=$pdo->prepare('SELECT * FROM posts WHERE id=?');$s->execute([$postId]);$post=$s->fetch(); if(!$post)return;
+        
+        // Lấy thông tin bài đăng hiện tại kèm vector ảnh (nếu có)
+        $post = self::getPostWithImageEmbedding($pdo, $postId);
+        if(!$post) return;
+
         $opposite=$post['post_type']==='LOST'?'FOUND':'LOST';
-        $q=$pdo->prepare('SELECT * FROM posts WHERE post_type=? AND status="OPEN" AND category_id=? AND id<>? ORDER BY created_at DESC LIMIT 50');$q->execute([$opposite,$post['category_id'],$postId]);
-        $threshold=(float)(getenv('AI_MATCH_THRESHOLD')?:0.72);
-        foreach($q->fetchAll(PDO::FETCH_ASSOC) as $candidate){
-            $score=AiClient::similarity($post,$candidate);
-            if($score<$threshold) continue;
-            $lost=$post['post_type']==='LOST'?$post:$candidate; $found=$post['post_type']==='FOUND'?$post:$candidate;
+        
+        // Lấy danh sách 50 bài đăng đối lập
+        $q=$pdo->prepare('SELECT id FROM posts WHERE post_type=? AND status="OPEN" AND category_id=? AND id<>? ORDER BY created_at DESC LIMIT 50');
+        $q->execute([$opposite, $post['category_id'], $postId]);
+        
+        $threshold=(float)(getenv('AI_MATCH_THRESHOLD')?:0.55); // Giảm ngưỡng mặc định để tương thích multimodal
+        
+        foreach($q->fetchAll(PDO::FETCH_COLUMN) as $candidateId) {
+            $candidate = self::getPostWithImageEmbedding($pdo, (int)$candidateId);
+            if(!$candidate) continue;
+
+            // Gọi AI client tính điểm theo mô hình multimodal-v1
+            $score = AiClient::similarity($post, $candidate);
+            if($score < $threshold) continue;
+
+            $lost = $post['post_type']==='LOST' ? $post : $candidate; 
+            $found = $post['post_type']==='FOUND' ? $post : $candidate;
+
             $ins=$pdo->prepare('INSERT INTO matches(lost_post_id,found_post_id,similarity_score,ai_model,status,created_at) VALUES(?,?,?,?,"PENDING",NOW()) ON DUPLICATE KEY UPDATE similarity_score=VALUES(similarity_score), ai_model=VALUES(ai_model)');
-            $ins->execute([$lost['id'],$found['id'],$score,'hybrid-text-v1']);
-            foreach(array_unique([(int)$lost['user_id'],(int)$found['user_id']]) as $uid){
+            $ins->execute([$lost['id'], $found['id'], $score, 'multimodal-v1']);
+
+            foreach(array_unique([(int)$lost['user_id'], (int)$found['user_id']]) as $uid){
                 $n=$pdo->prepare('INSERT INTO notifications(user_id,title,content,is_read,created_at) VALUES(?,?,?,0,NOW())');
-                $n->execute([$uid,'Có đồ vật tương đồng',sprintf('Hệ thống phát hiện một bài đăng có độ tương đồng %.1f%%.', $score*100)]);
+                $n->execute([$uid, 'Có đồ vật tương đồng', sprintf('Hệ thống phát hiện một bài đăng có độ tương đồng %.1f%%.', $score*100)]);
             }
         }
+    }
+
+    /**
+     * Hàm phụ trợ lấy thông tin bài đăng kèm theo mảng vector ảnh (image_embedding)
+     */
+    private static function getPostWithImageEmbedding(PDO $pdo, int $postId): ?array
+    {
+        $stmt = $pdo->prepare('
+            SELECT p.*, af.embedding_data 
+            FROM posts p
+            LEFT JOIN images i ON p.id = i.post_id AND i.is_primary = 1
+            LEFT JOIN ai_features af ON i.id = af.image_id
+            WHERE p.id = ?
+        ');
+        $stmt->execute([$postId]);
+        $post = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$post) return null;
+
+        // Chuyển đổi chuỗi JSON vector lưu trong DB thành mảng PHP
+        $post['image_embedding'] = !empty($post['embedding_data']) 
+            ? json_decode($post['embedding_data'], true) 
+            : null;
+
+        return $post;
     }
 }

@@ -1,6 +1,15 @@
+# Web Framework & Server
 fastapi==0.116.1
 uvicorn[standard]==0.35.0
 pydantic==2.11.7
+
+# Machine Learning & Text Processing
 scikit-learn==1.7.1
 joblib==1.5.1
-numpy==2.3.2
+numpy>=1.26.0,<2.0.0
+
+# Deep Learning & Vision (CLIP Image Matching)
+torch
+torchvision
+transformers
+pillow
